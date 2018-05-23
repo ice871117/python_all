@@ -27,6 +27,7 @@ class DataSource:
     __OVERLAP = 128
     __file_name_to_label_map = dict()
     __label_to_index_map = dict()
+    last_read_file_name = ""
 
     def __init__(self, working_path, train_file_path, start_index=0, repeat=1):
         """
@@ -36,12 +37,15 @@ class DataSource:
         self.workingPath = working_path
         self.currentFileIndex = start_index
         self.__REPEAT = repeat
+        self.totalFiles = len(os.listdir(self.workingPath))
+        print("total files:", self.totalFiles)
         for root, dirs, files in os.walk(working_path):
             for fileName in files:
                 if fileName.find("DS_Store") >= 0:
                     os.remove(os.path.join(root, fileName))
         if train_file_path:
             self.__init_train_category(train_file_path)
+
 
     def __init_train_category(self, category_csv):
         all_data = pd.read_csv(category_csv)
@@ -58,6 +62,9 @@ class DataSource:
 
     def get_category_num(self):
         return self.category_num
+
+    def get_last_read_file_name(self):
+        return self.last_read_file_name
 
     def setCurrentIndex(self, index):
         """
@@ -87,7 +94,7 @@ class DataSource:
                 return k
         return None
 
-    def next(self, skipped_frames, batch_size, data_size, for_test=False):
+    def next(self, skipped_frames, batch_size, data_size):
         """
         :param skipped_frames: how many frames to be skipped at the front of each file
         :param batch_size: how many files you want to sample
@@ -101,23 +108,22 @@ class DataSource:
         """
         batch_size = batch_size / self.__REPEAT
         for root, dirs, files in os.walk(self.workingPath):
-            if self.totalFiles == -1:
-                self.totalFiles = len(files)
-                print("total files:", self.totalFiles)
+            if self.totalFiles <= 0:
+                print("the folder ", self.workingPath, " is empty no file could be read!")
+                return None, None
             end = int(self.currentFileIndex + batch_size)\
                 if self.totalFiles > batch_size + self.currentFileIndex\
                 else self.totalFiles
             if end <= 0 or data_size <= 0:
                 print("reach end or dataSize is below 0, currIdx=", str(self.currentFileIndex), ";dataSize=", data_size)
-                return None
+                return None, None
             real_batch = int((end - self.currentFileIndex) * self.__REPEAT)
             data = np.zeros((real_batch, data_size), np.float32)
             mark = np.zeros((real_batch, self.category_num), np.int32)
             j = 0
-            return_for_test_file_name = ""
             try:
                 for i in range(self.currentFileIndex, end):
-                    return_for_test_file_name = file_name = files[i]
+                    self.last_read_file_name = file_name = files[i]
                     category_index = self.__label_to_index_map[self.__file_name_to_label_map[file_name]]\
                         if file_name in self.__file_name_to_label_map else 0
                     print("----> opening index=", i, " name=", file_name," category=", category_index)
@@ -141,16 +147,10 @@ class DataSource:
                 print("next() exception occurred! e: ", str(e))
                 logging.exception(e)
             self.currentFileIndex = end
-            if for_test:
-                if j < real_batch:
-                    return data[0:j, :], return_for_test_file_name
-                else:
-                    return data, return_for_test_file_name
+            if j < real_batch:
+                return data[0:j, :], mark[0:j, :]
             else:
-                if j < real_batch:
-                    return data[0:j, :], mark[0:j, :]
-                else:
-                    return data, mark
+                return data, mark
 
     @staticmethod
     def transform_to_wave(file_path, out_path):
@@ -193,14 +193,14 @@ class DataSource:
             wave_data.resize(length, 2)
             for i in range(0, wave_data.shape[0]):
                 result[0][i] = (wave_data[i][0] + 32768) / 65535.0
-            result.resize(real_repeat, read_frames // real_repeat)
+            result.resize(real_repeat, tmp_read_frames // real_repeat)
             return result
         else:
             length = wave_data.shape[0]
             result = np.zeros((1, length), dtype=np.float32)
             for i in range(0, length):
                 result[0][i] = (wave_data[i] + 32768) / 65535.0
-            result.resize(real_repeat, read_frames // real_repeat)
+            result.resize(real_repeat, tmp_read_frames // real_repeat)
             return result
 
     @staticmethod

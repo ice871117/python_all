@@ -1,0 +1,8 @@
+.idea/
+*.iml
+bin/
+gen/
+build/
+*.log
+.idea
+cached*

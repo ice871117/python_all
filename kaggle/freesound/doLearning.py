@@ -10,6 +10,7 @@ import numpy as np
 
 # Parameters
 WORKING_PATH = "../../../input/audio_train"
+EXAM_PATH = "../../../input/audio_exam"
 TEST_PATH = "../../../input/audio_test"
 TRAIN_FILE = "train.csv"
 SUBMIT_FILE = "sample_submission.csv"
@@ -24,11 +25,13 @@ PROCESS_AUDIO_FRAMES = 16384
 FLATTEN_SIZE = 128
 
 LEARNING_RATE = 1e-4
-BATCH_SIZE = 60
+BATCH_SIZE = 6 * REPEAT_SEGMENT_FOR_EACH_FILE
 DISPLAY_STEP = 10
 
 # the time we skip for each wav file at head
 SKIP_HEAD_IN_SECONDS = 0
+# publish result or just tuning
+PUBLISH = False
 
 
 def variable_summaries(var):
@@ -123,18 +126,26 @@ def get_moving_avg(old_value, new_value, ratio):
         return new_value
 
 
-def top_n_value(data_source, arr, n):
-    result = []
-    arr = sorted(arr, reverse=True)
+def top_n_value(arr, n):
+    sorted_dict = dict()
     for index, item in enumerate(arr):
-        if index < n:
-            result.append(item)
-        else:
+        sorted_dict[item] = index
+    sorted_keys = sorted(sorted_dict.keys(), reverse=True)
+    result = []
+    for index, key in enumerate(sorted_keys):
+        if index >= n:
             break
-    if len(result) > 0:
+        result.append(sorted_dict.get(key))
+    return result
+
+
+def trans_index_to_label(data_source, arr):
+    if len(arr) > 0:
         res_str = ""
-        for i in result:
-            res_str += data_source.find_label_by_index(i) + " "
+        for i in arr:
+            if i > 0:
+                res_str += " "
+            res_str += data_source.find_label_by_index(i)
         print("top_n_value=", res_str)
         return res_str
     else:
@@ -201,7 +212,7 @@ saver = tf.train.Saver(max_to_keep=1)
 model_file = tf.train.latest_checkpoint(TRAIN_DATA_SAVE_PATH)
 if model_file:
     saver.restore(sess, model_file)
-for i in range(10):
+for i in range(10000):
     if train_data_source.isEOF():
         break
     (batchX, batchY) = train_data_source.next(int(44100 * SKIP_HEAD_IN_SECONDS), BATCH_SIZE, PROCESS_AUDIO_FRAMES)
@@ -215,26 +226,37 @@ for i in range(10):
 
 train_writer.close()
 
-# start test:
-test_data_source = DataSource(TEST_PATH, None, start_index=0, repeat=REPEAT_SEGMENT_FOR_EACH_FILE)
-test_cross_entropy_avg = 0
-test_accuracy_avg = 0
-loopSize = 150
-MOVING_AVG_RATIO = 0.98
-result_frame = pd.DataFrame(np.arange(test_data_source.totalFiles * 2).reshape(test_data_source.totalFiles, 2), columns=['fname', 'label'])
-for i in range(0, test_data_source.totalFiles):
-    (testX, file_name) = test_data_source.next(int(44100 * SKIP_HEAD_IN_SECONDS), 1, PROCESS_AUDIO_FRAMES, for_test=True)
-    logits = y_conv.eval(feed_dict={x: testX, keep_prob: 1.0})
-    # test_cross_entropy, test_accuracy, summary = sess.run([cross_entropy, accuracy, merged], feed_dict={x: testX, keep_prob: 1.0})
-    # test_cross_entropy_avg = get_moving_avg(test_cross_entropy_avg, test_cross_entropy, MOVING_AVG_RATIO)
-    # test_accuracy_avg = get_moving_avg(test_accuracy_avg, test_accuracy, MOVING_AVG_RATIO)
-    # test_writer.add_summary(summary, i)
-    result_frame.iloc[i, 0] = file_name
-    result_frame.iloc[i, 1] = top_n_value(train_data_source, logits, 3)
+if not PUBLISH:
+    # start exam:
+    exam_data_source = DataSource(TEST_PATH, TRAIN_FILE, start_index=0, repeat=REPEAT_SEGMENT_FOR_EACH_FILE)
+    test_cross_entropy_avg = 0
+    test_accuracy_avg = 0
+    MOVING_AVG_RATIO = 0.98
+    for i in range(0, 10000):
+        if train_data_source.isEOF():
+            break
+        testX, _ = exam_data_source.next(int(44100 * SKIP_HEAD_IN_SECONDS), BATCH_SIZE, PROCESS_AUDIO_FRAMES)
+        test_cross_entropy, test_accuracy, summary = sess.run([cross_entropy, accuracy, merged], feed_dict={x: testX, keep_prob: 1.0})
+        test_cross_entropy_avg = get_moving_avg(test_cross_entropy_avg, test_cross_entropy, MOVING_AVG_RATIO)
+        test_accuracy_avg = get_moving_avg(test_accuracy_avg, test_accuracy, MOVING_AVG_RATIO)
+        test_writer.add_summary(summary, i)
 
-result_frame.to_csv(path_or_buf=SUBMIT_FILE)
-test_writer.close()
-print("=====> test result training accuracy %f cross_entropy %f" % (test_accuracy_avg, test_cross_entropy_avg))
+    test_writer.close()
+    print("=====> test result training accuracy %f cross_entropy %f" % (test_accuracy_avg, test_cross_entropy_avg))
+
+if PUBLISH:
+    # start publish:
+    test_data_source = DataSource(TEST_PATH, TRAIN_FILE, start_index=0, repeat=REPEAT_SEGMENT_FOR_EACH_FILE)
+    result_frame = pd.DataFrame(np.zeros([test_data_source.totalFiles, 2]), columns=['fname', 'label'])
+    for i in range(0, test_data_source.totalFiles):
+        testX, _ = test_data_source.next(int(44100 * SKIP_HEAD_IN_SECONDS), REPEAT_SEGMENT_FOR_EACH_FILE, PROCESS_AUDIO_FRAMES)
+        logits = y_conv.eval(feed_dict={x: testX, keep_prob: 1.0})
+        result_frame.iloc[i, 0] = test_data_source.get_last_read_file_name()
+        result_frame.iloc[i, 1] = trans_index_to_label(test_data_source, top_n_value(logits.sum(axis=0), 3))
+
+    result_frame.to_csv(path_or_buf=SUBMIT_FILE)
+    print("=====> publish done")
 
 sess.close()
 print_duration(start_time)
+print("===== job finish =====")
