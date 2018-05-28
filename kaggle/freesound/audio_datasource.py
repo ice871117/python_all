@@ -5,19 +5,24 @@ from ffmpy import FFmpeg
 import logging
 from matplotlib import pyplot as plt
 import pandas as pd
+import random
+
 
 class NotEnoughFrameException(Exception):
+
     def __init__(self, value):
         self.value = value
+
     def __str__(self):
         return self.value
 
+
 class DataSource:
-    '''
+    """
     providing fft result (in amplitude) of single channel pcm data stream in np.array 
     of size [batchSize, dataSize] in np.float32
     NOTE THAT the fft result is symmetric, so the [0, dataSize/2] and [dataSize/2, dataSize] are same for each row.
-    '''
+    """
     totalFiles = -1
     workingPath = ''
     currentFileIndex = 0
@@ -28,24 +33,26 @@ class DataSource:
     __file_name_to_label_map = dict()
     __label_to_index_map = dict()
     last_read_file_name = ""
+    __rand_arr = []
 
-    def __init__(self, working_path, train_file_path, start_index=0, repeat=1):
+    def __init__(self, working_path, train_file_path, start_index=0, repeat=1, traverse_random=False):
         """
         :param working_path: the directory path of all m4a files
-        :param tempFilePath: the path for temporary file(one wave temp file is generated)
+        :param train_file_path: the path for the train data category file
         """
         self.workingPath = working_path
         self.currentFileIndex = start_index
         self.__REPEAT = repeat
         self.totalFiles = len(os.listdir(self.workingPath))
         print("total files:", self.totalFiles)
+        if traverse_random:
+            self.__rand_arr = self.__get_random_arr(self.totalFiles)
         for root, dirs, files in os.walk(working_path):
             for fileName in files:
                 if fileName.find("DS_Store") >= 0:
                     os.remove(os.path.join(root, fileName))
         if train_file_path:
             self.__init_train_category(train_file_path)
-
 
     def __init_train_category(self, category_csv):
         all_data = pd.read_csv(category_csv)
@@ -66,7 +73,7 @@ class DataSource:
     def get_last_read_file_name(self):
         return self.last_read_file_name
 
-    def setCurrentIndex(self, index):
+    def set_current_index(self, index):
         """
         Set the current file index in given directory
         :param index: 
@@ -94,10 +101,10 @@ class DataSource:
                 return k
         return None
 
-    def next(self, skipped_frames, batch_size, data_size):
+    def next(self, skipped_seconds, batch_size, data_size):
         """
-        :param skipped_frames: how many frames to be skipped at the front of each file
-        :param batch_size: how many files you want to sample
+        :param skipped_seconds: how many seconds to be skipped at the front of each file
+        :param batch_size: how many rows of data you want to sample
         :param data_size: how many frames of pcm you can get from each file
                          this number should be 2^N such as 4096
         :return:
@@ -106,37 +113,37 @@ class DataSource:
                 or return [leftFileNum, dataSize] or None if no file is left
                 mark: the np.array in size [batchSize, categoryNum] one-hot form
         """
-        batch_size = batch_size / self.__REPEAT
         for root, dirs, files in os.walk(self.workingPath):
             if self.totalFiles <= 0:
                 print("the folder ", self.workingPath, " is empty no file could be read!")
                 return None, None
-            end = int(self.currentFileIndex + batch_size)\
-                if self.totalFiles > batch_size + self.currentFileIndex\
-                else self.totalFiles
-            if end <= 0 or data_size <= 0:
+            if data_size <= 0:
                 print("reach end or dataSize is below 0, currIdx=", str(self.currentFileIndex), ";dataSize=", data_size)
                 return None, None
-            real_batch = int((end - self.currentFileIndex) * self.__REPEAT)
-            data = np.zeros((real_batch, data_size), np.float32)
-            mark = np.zeros((real_batch, self.category_num), np.int32)
+            data = np.zeros((batch_size, data_size), np.float32)
+            mark = np.zeros((batch_size, self.category_num), np.int32)
             j = 0
             try:
-                for i in range(self.currentFileIndex, end):
-                    self.last_read_file_name = file_name = files[i]
+                for i in range(self.currentFileIndex, self.totalFiles):
+                    if j >= batch_size:
+                        break
+                    self.last_read_file_name = file_name = files[i if len(self.__rand_arr) == 0 else self.__rand_arr[i]]
                     category_index = self.__label_to_index_map[self.__file_name_to_label_map[file_name]]\
                         if file_name in self.__file_name_to_label_map else 0
-                    print("----> opening index=", i, " name=", file_name," category=", category_index)
+                    print("----> opening index=", i, " name=", file_name, " category=", category_index)
+                    self.currentFileIndex = i
                     # already wave and no need to transform
                     # outPath = self.transform2Wave(os.path.join(root, fileName), self.tempFilePath)
                     try:
-                        temp = self.read_wave_data(skipped_frames, data_size + self.__OVERLAP, os.path.join(root, file_name))
+                        temp = self.read_wave_data(skipped_seconds, data_size + self.__OVERLAP, os.path.join(root, file_name))
                         for k in range(0, temp.shape[0]):
                             data[j] = self.get_specgram(temp[k])
                             mark[j][category_index] = 1
                             if np.any(np.isnan(data[j])):
                                 raise Exception("Data contains NaN")
                             j += 1
+                            if j >= batch_size:
+                                break
                     except NotEnoughFrameException as e:
                         print(file_name, e)
                         continue
@@ -146,11 +153,20 @@ class DataSource:
             except BaseException as e:
                 print("next() exception occurred! e: ", str(e))
                 logging.exception(e)
-            self.currentFileIndex = end
-            if j < real_batch:
+            if j < batch_size:
                 return data[0:j, :], mark[0:j, :]
             else:
                 return data, mark
+
+    @staticmethod
+    def __get_random_arr(max):
+        result = np.arange(0, max)
+        for i in range(0, max):
+            temp = result[i]
+            swap_index = random.randint(0, max - 1)
+            result[i] = result[swap_index]
+            result[swap_index] = temp
+        return result
 
     @staticmethod
     def transform_to_wave(file_path, out_path):
@@ -158,10 +174,10 @@ class DataSource:
         ffmpeg.run()
         return out_path
 
-    def read_wave_data(self, skipped_frames, read_frames, file_path):
+    def read_wave_data(self, skipped_seconds, read_frames, file_path):
         # open a wave file, and return a Wave_read object
         f = wave.open(file_path, "rb")
-        # read the wave's format infomation,and return a tuple
+        # read the wave's format information,and return a tuple
         params = f.getparams()
         # get the info
         nchannels, sampwidth, framerate, nframes = params[:4]
@@ -171,6 +187,7 @@ class DataSource:
         print("totalFrames:", nframes)
         real_repeat = self.__REPEAT
         tmp_read_frames = int(real_repeat * read_frames)
+        skipped_frames = skipped_seconds *framerate
         while nframes < skipped_frames + tmp_read_frames:
             real_repeat -= 1
             if real_repeat <= 0:
@@ -218,19 +235,19 @@ class DataSource:
         out = 10 * np.log10(out[0].flatten())
         return self.normalize(out)
 
-    def isEOF(self):
+    def is_EOF(self):
         return self.totalFiles >= 0 and self.currentFileIndex >= self.totalFiles - 1
 
 
 if __name__ == "__main__":
     workingPath = "../../../input/audio_train"
     train_file = "train.csv"
-    dataSource = DataSource(workingPath, train_file, 3, 1)
-    (data, mark) = dataSource.next(44100 * 0, 1, 16384)
+    data_source = DataSource(workingPath, train_file, start_index=204, repeat=1)
+    (data, mark) = data_source.next(0, 1, 16384)
 
     print('data.shape=', data.shape)
     data.resize(128, 128)
     im = plt.imshow(data, cmap=plt.cm.hot, origin='upper')
-    plt.title('specgram of wav')
+    plt.title(data_source.find_label_by_index(mark.argmax()))
     plt.show()
     print(data)

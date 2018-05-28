@@ -7,6 +7,7 @@ from audio_datasource import DataSource
 import time
 import pandas as pd
 import numpy as np
+import random
 
 # Parameters
 WORKING_PATH = "../../../input/audio_train"
@@ -17,15 +18,15 @@ SUBMIT_FILE = "sample_submission.csv"
 TRAIN_DATA_SAVE_PATH = "./cached_model"
 TRAIN_DATA_FILE_NAME = "kaggle_audio_tagging"
 START_FILE_INDEX = 0
-REPEAT_SEGMENT_FOR_EACH_FILE = 10
+REPEAT_SEGMENT_FOR_EACH_FILE = 4
 # almost 6 seconds of audio, we make it easier to be squared
 # 262144 = 512 x 512
 # 16384 = 128 x 128
 PROCESS_AUDIO_FRAMES = 16384
 FLATTEN_SIZE = 128
 
-LEARNING_RATE = 1e-4
-BATCH_SIZE = 6 * REPEAT_SEGMENT_FOR_EACH_FILE
+LEARNING_RATE = 1e-5
+BATCH_SIZE = 32
 DISPLAY_STEP = 10
 
 # the time we skip for each wav file at head
@@ -53,7 +54,7 @@ def weight_variable(shape):
     :param shape:
     :return:
     """
-    initial = tf.truncated_normal(shape, stddev = 0.1)
+    initial = tf.truncated_normal(shape, stddev=0.1)
     return tf.Variable(initial)
 
 
@@ -63,7 +64,7 @@ def bias_variable(shape):
     :param shape:
     :return:
     """
-    initial = tf.constant(0.1, shape = shape)
+    initial = tf.constant(0.1, shape=shape)
     return tf.Variable(initial)
 
 
@@ -77,10 +78,11 @@ def conv2d(x, W):
     return tf.nn.conv2d(x, W, strides=[1, 1, 1, 1], padding='SAME')
 
 
-def max_pool(x, size = 2):
+def max_pool(x, size=2):
     """
     size x size max pool
     :param x:
+    :param size:
     :return:
     """
     return tf.nn.max_pool(x, ksize=[1, size, size, 1], strides=[1, size, size, 1], padding='SAME')
@@ -154,9 +156,13 @@ def trans_index_to_label(data_source, arr):
 
 # remember when we start
 start_time = time.time()
+print(time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()))
 
 sess = tf.InteractiveSession()
-train_data_source = DataSource(WORKING_PATH, TRAIN_FILE, start_index= START_FILE_INDEX, repeat = REPEAT_SEGMENT_FOR_EACH_FILE)
+train_data_source = DataSource(WORKING_PATH, TRAIN_FILE,
+                               start_index=START_FILE_INDEX,
+                               repeat=REPEAT_SEGMENT_FOR_EACH_FILE,
+                               traverse_random=True)
 CATEGORY_NUM = train_data_source.get_category_num()
 # tf Graph Input
 x = tf.placeholder(tf.float32, [None, PROCESS_AUDIO_FRAMES])
@@ -164,32 +170,39 @@ y_ = tf.placeholder(tf.float32, [None, CATEGORY_NUM])
 x_audio = tf.reshape(x, [-1, FLATTEN_SIZE, FLATTEN_SIZE, 1])
 
 # conv layer 1
-conv_1 = add_cnn_layer("cnn_1", x_audio, 5, 5, 1, 32, pool_size=4)
+conv_1 = add_cnn_layer("cnn_1", x_audio, 5, 5, 1, 32, pool_size=2)
 
 # conv layer 2
-conv_2 = add_cnn_layer("cnn_2", conv_1, 5, 5, 32, 64, pool_size=4)
+conv_2 = add_cnn_layer("cnn_2", conv_1, 5, 5, 32, 64, pool_size=2)
 
 # conv layer 3
-conv_3 = add_cnn_layer("cnn_3", conv_2, 3, 3, 64, 128, pool_size=0)
+conv_3 = add_cnn_layer("cnn_3", conv_2, 3, 3, 64, 128, pool_size=2)
 
 flat_layer, flat_size = get_cnn_layer_flat(conv_3)
 
 # full connection layer 1
-W_fc1 = weight_variable([flat_size, 1024])
-b_fc1 = bias_variable([1, 1024])
-h_fc1 = tf.nn.relu(tf.add(tf.matmul(flat_layer, W_fc1), b_fc1))
+with tf.name_scope("fc_1"):
+    W_fc1 = weight_variable([flat_size, 1024])
+    variable_summaries(W_fc1)
+    b_fc1 = bias_variable([1, 1024])
+    variable_summaries(b_fc1)
+    h_fc1 = tf.nn.relu(tf.add(tf.matmul(flat_layer, W_fc1), b_fc1))
 
 # drop out
 keep_prob = tf.placeholder(tf.float32)
 h_fc1_drop = tf.nn.dropout(h_fc1, keep_prob)
 
 # full connection layer 2
-W_fc2 = weight_variable([1024, CATEGORY_NUM])
-b_fc2 = bias_variable([1, CATEGORY_NUM])
-y_conv = tf.nn.softmax(tf.add(tf.matmul(h_fc1_drop, W_fc2), b_fc2))
+with tf.name_scope("fc_2"):
+    W_fc2 = weight_variable([1024, CATEGORY_NUM])
+    variable_summaries(W_fc2)
+    b_fc2 = bias_variable([1, CATEGORY_NUM])
+    variable_summaries(b_fc2)
+    y_conv = tf.nn.softmax(tf.add(tf.matmul(h_fc1_drop, W_fc2), b_fc2))
 
 with tf.name_scope("cross_entropy"):
-    cross_entropy = tf.reduce_mean(-tf.reduce_sum(y_ * tf.log(tf.clip_by_value(y_conv, 1e-10, 1.0)), reduction_indices=[1]))
+    cross_entropy = tf.reduce_mean(
+        -tf.reduce_sum(y_ * tf.log(tf.clip_by_value(y_conv, 1e-10, 1.0)), reduction_indices=[1]))
 tf.summary.scalar('cross_entropy', cross_entropy)
 with tf.name_scope("train"):
     train_step = tf.train.AdamOptimizer(LEARNING_RATE).minimize(cross_entropy)
@@ -212,31 +225,43 @@ saver = tf.train.Saver(max_to_keep=1)
 model_file = tf.train.latest_checkpoint(TRAIN_DATA_SAVE_PATH)
 if model_file:
     saver.restore(sess, model_file)
-for i in range(10000):
-    if train_data_source.isEOF():
-        break
-    (batchX, batchY) = train_data_source.next(int(44100 * SKIP_HEAD_IN_SECONDS), BATCH_SIZE, PROCESS_AUDIO_FRAMES)
+for i in range(40000):
+    # if train_data_source.is_EOF():
+    #     break
+    train_data_source.set_current_index(random.randint(0, train_data_source.totalFiles - BATCH_SIZE))
+    (batchX, batchY) = train_data_source.next(SKIP_HEAD_IN_SECONDS, BATCH_SIZE, PROCESS_AUDIO_FRAMES)
     print("=====> one round complete: batchX shape=", batchX.shape, "; batchY shape=", batchY.shape)
     if i % DISPLAY_STEP == 0:
-        train_cross_entropy, train_accuracy, summary = sess.run([cross_entropy, accuracy, merged], feed_dict={x: batchX, y_: batchY, keep_prob: 1.0})
+        run_options = tf.RunOptions(trace_level=tf.RunOptions.FULL_TRACE)
+        run_metadata = tf.RunMetadata()
+        train_cross_entropy, train_accuracy, summary = sess.run([cross_entropy, accuracy, merged],
+                                                                feed_dict={x: batchX, y_: batchY, keep_prob: 1.0},
+                                                                options=run_options,
+                                                                run_metadata=run_metadata)
+        train_writer.add_run_metadata(run_metadata, 'step%04d' % i)
         train_writer.add_summary(summary, i)
         print("step %d, training accuracy %f cross_entropy %f" % (i, train_accuracy, train_cross_entropy))
-        saver.save(sess, TRAIN_DATA_SAVE_PATH + TRAIN_DATA_FILE_NAME)
+        saver.save(sess, TRAIN_DATA_SAVE_PATH, latest_filename=TRAIN_DATA_FILE_NAME)
     train_step.run(feed_dict={x: batchX, y_: batchY, keep_prob: 0.5})
 
 train_writer.close()
 
 if not PUBLISH:
     # start exam:
-    exam_data_source = DataSource(TEST_PATH, TRAIN_FILE, start_index=0, repeat=REPEAT_SEGMENT_FOR_EACH_FILE)
+    exam_data_source = DataSource(EXAM_PATH, TRAIN_FILE, start_index=0, repeat=REPEAT_SEGMENT_FOR_EACH_FILE)
     test_cross_entropy_avg = 0
     test_accuracy_avg = 0
     MOVING_AVG_RATIO = 0.98
     for i in range(0, 10000):
-        if train_data_source.isEOF():
+        if exam_data_source.is_EOF():
             break
-        testX, _ = exam_data_source.next(int(44100 * SKIP_HEAD_IN_SECONDS), BATCH_SIZE, PROCESS_AUDIO_FRAMES)
-        test_cross_entropy, test_accuracy, summary = sess.run([cross_entropy, accuracy, merged], feed_dict={x: testX, keep_prob: 1.0})
+        run_options = tf.RunOptions(trace_level=tf.RunOptions.FULL_TRACE)
+        run_metadata = tf.RunMetadata()
+        testX, testY = exam_data_source.next(SKIP_HEAD_IN_SECONDS, BATCH_SIZE, PROCESS_AUDIO_FRAMES)
+        test_cross_entropy, test_accuracy, summary = sess.run([cross_entropy, accuracy, merged],
+                                                              feed_dict={x: testX, y_: testY, keep_prob: 1.0},
+                                                              options=run_options,
+                                                              run_metadata=run_metadata)
         test_cross_entropy_avg = get_moving_avg(test_cross_entropy_avg, test_cross_entropy, MOVING_AVG_RATIO)
         test_accuracy_avg = get_moving_avg(test_accuracy_avg, test_accuracy, MOVING_AVG_RATIO)
         test_writer.add_summary(summary, i)
@@ -249,7 +274,8 @@ if PUBLISH:
     test_data_source = DataSource(TEST_PATH, TRAIN_FILE, start_index=0, repeat=REPEAT_SEGMENT_FOR_EACH_FILE)
     result_frame = pd.DataFrame(np.zeros([test_data_source.totalFiles, 2]), columns=['fname', 'label'])
     for i in range(0, test_data_source.totalFiles):
-        testX, _ = test_data_source.next(int(44100 * SKIP_HEAD_IN_SECONDS), REPEAT_SEGMENT_FOR_EACH_FILE, PROCESS_AUDIO_FRAMES)
+        testX, _ = test_data_source.next(SKIP_HEAD_IN_SECONDS, REPEAT_SEGMENT_FOR_EACH_FILE,
+                                         PROCESS_AUDIO_FRAMES)
         logits = y_conv.eval(feed_dict={x: testX, keep_prob: 1.0})
         result_frame.iloc[i, 0] = test_data_source.get_last_read_file_name()
         result_frame.iloc[i, 1] = trans_index_to_label(test_data_source, top_n_value(logits.sum(axis=0), 3))
