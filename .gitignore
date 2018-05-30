@@ -1,3 +1,4 @@
+kaggle_audio_tagging
 .idea
 .idea/
 .idea/*
@@ -8,3 +9,9 @@ build/
 *.log
 .idea
 cached*
+test
+test/
+test/*
+train
+train/
+train/*

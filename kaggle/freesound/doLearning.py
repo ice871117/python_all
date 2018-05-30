@@ -170,21 +170,23 @@ y_ = tf.placeholder(tf.float32, [None, CATEGORY_NUM])
 x_audio = tf.reshape(x, [-1, FLATTEN_SIZE, FLATTEN_SIZE, 1])
 
 # conv layer 1
-conv_1 = add_cnn_layer("cnn_1", x_audio, 5, 5, 1, 32, pool_size=2)
+conv_1 = add_cnn_layer("cnn_1", x_audio, 5, 5, 1, 64, pool_size=2)
 
 # conv layer 2
-conv_2 = add_cnn_layer("cnn_2", conv_1, 5, 5, 32, 64, pool_size=2)
+conv_2 = add_cnn_layer("cnn_2", conv_1, 3, 3, 64, 256, pool_size=2)
 
 # conv layer 3
-conv_3 = add_cnn_layer("cnn_3", conv_2, 3, 3, 64, 128, pool_size=2)
+conv_3 = add_cnn_layer("cnn_3", conv_2, 3, 3, 256, 128, pool_size=2)
 
 flat_layer, flat_size = get_cnn_layer_flat(conv_3)
 
 # full connection layer 1
 with tf.name_scope("fc_1"):
-    W_fc1 = weight_variable([flat_size, 1024])
+    with tf.name_scope("weight"):
+        W_fc1 = weight_variable([flat_size, 1024])
     variable_summaries(W_fc1)
-    b_fc1 = bias_variable([1, 1024])
+    with tf.name_scope("bias"):
+        b_fc1 = bias_variable([1, 1024])
     variable_summaries(b_fc1)
     h_fc1 = tf.nn.relu(tf.add(tf.matmul(flat_layer, W_fc1), b_fc1))
 
@@ -194,9 +196,11 @@ h_fc1_drop = tf.nn.dropout(h_fc1, keep_prob)
 
 # full connection layer 2
 with tf.name_scope("fc_2"):
-    W_fc2 = weight_variable([1024, CATEGORY_NUM])
+    with tf.name_scope("weight"):
+        W_fc2 = weight_variable([1024, CATEGORY_NUM])
     variable_summaries(W_fc2)
-    b_fc2 = bias_variable([1, CATEGORY_NUM])
+    with tf.name_scope("bias"):
+        b_fc2 = bias_variable([1, CATEGORY_NUM])
     variable_summaries(b_fc2)
     y_conv = tf.nn.softmax(tf.add(tf.matmul(h_fc1_drop, W_fc2), b_fc2))
 
