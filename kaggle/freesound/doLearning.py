@@ -176,9 +176,16 @@ conv_1 = add_cnn_layer("cnn_1", x_audio, 5, 5, 1, 64, pool_size=2)
 conv_2 = add_cnn_layer("cnn_2", conv_1, 3, 3, 64, 256, pool_size=2)
 
 # conv layer 3
-conv_3 = add_cnn_layer("cnn_3", conv_2, 3, 3, 256, 128, pool_size=2)
+conv_3 = add_cnn_layer("cnn_3", conv_2, 3, 3, 256, 512, pool_size=2)
 
-flat_layer, flat_size = get_cnn_layer_flat(conv_3)
+# conv layer 4
+conv_4 = add_cnn_layer("cnn_4", conv_3, 3, 3, 512, 256, pool_size=0)
+
+# conv layer 5
+conv_5 = add_cnn_layer("cnn_5", conv_4, 3, 3, 256, 128, pool_size=0)
+
+
+flat_layer, flat_size = get_cnn_layer_flat(conv_5)
 
 # full connection layer 1
 with tf.name_scope("fc_1"):
