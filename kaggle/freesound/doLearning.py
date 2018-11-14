@@ -74,9 +74,9 @@ conv_3 = model.conv2d_layer("cnn_3", conv_2, [3, 3], 128, 128, pool_size=[2, 2],
 flat_layer, flat_size = model.get_cnn_layer_flat(conv_3)
 
 # dense layer 1
-dense1 = model.dense_layer("fc_1", flat_layer, flat_size, 1024, use_BN=True, use_dropout=True, local_keep_prob=keep_prob, activition=True, training=TRAIN)
+dense1 = model.dense_layer("fc_1", flat_layer, flat_size, 1024, use_BN=True, use_dropout=True, local_keep_prob=keep_prob, activation=True, training=TRAIN)
 # dense layer 2
-dense2 = model.dense_layer("fc_2", dense1, 1024, 256, use_BN=True, use_dropout=True, local_keep_prob=keep_prob, activition=True, training=TRAIN)
+dense2 = model.dense_layer("fc_2", dense1, 1024, 256, use_BN=True, use_dropout=True, local_keep_prob=keep_prob, activation=True, training=TRAIN)
 # dense layer 3
 dense3 = model.dense_layer("fc_3", dense2, 256, CATEGORY_NUM, training=TRAIN)
 

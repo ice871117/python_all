@@ -72,7 +72,7 @@ def conv2d_layer(layer_name, data, kernel, in_channels, out_channels, pool_size=
     return h_conv
 
 
-def dense_layer(layer_name, input, in_size, out_size, use_BN=False, use_dropout=False, local_keep_prob=0, activition=False, training=False):
+def dense_layer(layer_name, input, in_size, out_size, use_BN=False, use_dropout=False, local_keep_prob=0, activation=False, training=False):
     W_fc1 = weight_variable([in_size, out_size])
     variable_summaries(W_fc1, layer_name + "_weight")
     b_fc1 = bias_variable([1, out_size])
